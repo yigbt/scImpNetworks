@@ -1,0 +1,789 @@
+---
+title: "Network preservation from synthetic and real biological data after imputation"
+author: "Lisa M. Steinheuer"
+date: "January 07, 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Objectives
+Data imputation can be used to de-sparse scRNA-seq data, aiding in network inference. However the direct impact on the infered gene correlation networks remained out of focus. Here we generated a synthetic Gold data set, which is free from false zero entries, using a bulk RNA data set. Six different sparse data sets were derived from the Gold data, ranging in degree of sparsity, meaning they include increasing quantities of false zero counts. In total, six imputation tools were applied to the data and module preservation was calculated.
+
+# Set-up
+
+```{r libs}
+project <- "BeMa"
+
+# Source the helper functions
+source('HelperFunctions_MP.R', echo=TRUE)
+```
+
+# Data preparation and generation
+
+The procedure is taken from a paper by Peng and staff where they made use of a bulk data set to simulate single cell data. 
+All information was retrieved from their Gitlab page https://github.com/software-github/SCRABBLE_PAPER/tree/master/SimulationData_Strategy2
+
+## Get data from R-package 'scorrgoldnet'
+
+```{r data_info}
+install_github("lisbeth-dot-95/scorrgoldnet")
+library(scorrgoldnet)
+
+```
+
+
+
+# Analysis
+## Gold data
+```{r}
+Analysis_Part ="01"
+
+```
+```{r}
+trueExpr <- sc_gold
+
+
+save(trueExpr, file=paste0(Analysis_Part,"_",project,"_true_expression.RData"))
+
+sampleTree = hclust(dist(trueExpr), method = "average") 
+
+plot(sampleTree, main = "Sample clustering to detect outliers", sub="", xlab="", cex.lab = 1.5,cex.axis = 1.5, cex.main = 2)
+
+FindBetaAndPlot(data = trueExpr, 
+                powers = c(c(1:10), seq(from = 12, to=20, by=2)), 
+                data_set_name = "Gold")
+
+```
+
+```{r}
+build_tree(multiExpr = trueExpr, beta = 9, data_type = "Gold", minClusterSize = 20)
+
+save(TOM, file = paste0(Analysis_Part,"_",project,"_TOM_true_expression.RData"))
+save(dynamicColors, file = paste0(Analysis_Part,"_",project,"_DynamicColors_true_expression.RData"))
+```
+
+## Sparse data
+
+```{r}
+dropout_index <- c(0.01 ,0.09, 0.21, 0.42, 0.7, 0.99)
+for (x in 1:length(dropout_index)){
+  
+  do_Expr <- introduce_sparsity(dropout_index[x])
+  rownames(do_Expr) <- paste0("Gene",1:dim(do_Expr)[1])
+  colnames(do_Expr) <- paste0("Cell", 1:dim(do_Expr)[2])
+  do_Expr <- filterData(data = t(do_Expr))
+  
+  save(do_Expr, file = paste0(Analysis_Part,"_",project,"_dropExpr_",x,".RData"))
+  
+  # Save data as counts since they are required for certain imputation tools
+  
+  counts_dropout <- round((10^(do_Expr))-1,0)
+  save(counts_dropout, file = paste0(Analysis_Part,"_",project,"_Counts_dropExpr_",x,".RData"))
+  
+  #check_sparse(counts_dropout)
+  # exdata <- preprocessSC(t(counts_dropout))
+  # write.csv(exdata, file = paste0(Analysis_Part,"_",project,"_Counts_dropExpr_",dropout,".csv"))
+  print(paste("Dropout", x, "data set had", get_sparsity(as.data.frame(do_Expr)), "% sparsity"))
+}
+
+```
+
+## Imputations
+### DrImpute
+```{r}
+Analysis_Part ="02"
+
+```
+
+```{r}
+#install.packages("DrImpute")
+
+library("DrImpute")
+
+FindDataFiles(pattern = "01_BeMa_Counts_dropExpr_*|.RData", 
+              what2replace= "01_BeMa_|.RData")
+
+
+for (i in 1:length(files)){
+  load(paste0(files[i]))
+  exdata <- preprocessSC(t(counts_dropout))
+  logdat <- log(exdata+1)
+  cls <- getCls(logdat)
+  DrImpute_data <- DrImpute(logdat, cls = cls)
+  colnames(DrImpute_data) <- rownames(do_Expr)
+  save(DrImpute_data, file = paste0(Analysis_Part,"_",project,"_",names_data[i],"_DrImpute.RData"))
+  print(paste("DrImpute on", files[i],"done!"))
+}
+```
+### SAVER
+
+```{r}
+#install.packages("SAVER")
+library("SAVER")
+
+for (i in 1:length(files)){
+  load(paste0(files[i]))
+  exdata <- preprocessSC(t(counts_dropout))
+  SAVER_data <- saver(exdata, 
+                      do.fast = TRUE, 
+                      ncores = 8, 
+                      npred = NULL, 
+                      pred.cells = NULL, 
+                      pred.genes = NULL,
+                      pred.genes.only = FALSE, 
+                      null.model = FALSE, 
+                      mu = NULL, 
+                      estimates.only = TRUE)
+  SAVER_log <- log10(SAVER_data + 1)
+  SAVER_filter <- filterData(data = t(SAVER_log))
+  save(SAVER_filter, file = paste0(Analysis_Part,"_",project,"_",names_data[i],"_SAVER.RData"))
+  print(paste("SAVER on", files[i],"done!"))
+}
+
+
+```
+
+### DCA
+
+#### Export data
+
+```{r}
+for (i in 1:length(temp)){
+  load(paste0(rdata,temp[i]))
+  counts <- round((10^(do_Expr))-1,0)
+  write.csv(counts, file = paste0(Analysis_Part,"_",project,"_Counts_",names[i],".csv"))
+}
+
+```
+
+#### Import denoised data
+
+```{r}
+
+FindDataFiles(pattern = "*_DCA.csv", 
+              what2replace= "02_BeMa_|_DCA.csv")
+
+
+for (i in 1:length(files)){
+  exdata <- read.csv(paste0(rdata,files[i]), row.names = 1)
+  DCA_data <- log10(exdata+1)
+  save(DCA_data, file = paste0(Analysis_Part,"_",project,"_",names_data[i],"_DCA.RData"))
+  print(paste("DCA on", files[i],"done!"))
+}
+
+```
+
+### scNPF
+
+#### with individual networks
+
+```{r}
+#install.packages("DrImpute")
+#install.packages("devtools")
+#library(devtools)
+#install_github("BMILAB/scNPF")
+library(scNPF)
+
+FindDataFiles(pattern = "01_BeMa_dropExpr_*", 
+              what2replace= "01_BeMa_|.RData")
+
+# Get TOM from data & do imputation
+
+for (i in 1:length(files)){
+  load(paste0(files[i]))
+  build_tree(multiExpr = do_Expr, beta = 9, data_type = names_data[i], minClusterSize = 20)
+  colnames(TOM) <- colnames(do_Expr)
+  rownames(TOM) <- colnames(do_Expr)
+  Counts_Dropout <- round((10^(do_Expr))-1,0)
+  NPF_data_Counts <- scNPF.pro(x=t(Counts_Dropout), network=TOM ,nThreads=8)
+  rownames(NPF_data_Counts) <- colnames(do_Expr)
+  NPF_data <- log10(NPF_data_Counts + 1)
+  save(NPF_data, file = paste0(Analysis_Part,"_",project,"_",names_data[i],"_scNPF.RData"))
+  print(paste("scNPF on", files[i],"done!"))
+}
+```
+
+#### with gold network
+
+```{r}
+#install.packages("DrImpute")
+#install.packages("devtools")
+#library(devtools)
+#install_github("BMILAB/scNPF")
+library(scNPF)
+
+FindDataFiles(pattern = "01_BeMa_Counts_dropExpr_*", 
+              what2replace= "01_BeMa_|.RData")
+
+load(paste0(rdata,"03_BeMa_TOM_true_expression.RData"))
+colnames(TOM) <- colnames(trueExpr)
+rownames(TOM) <- colnames(trueExpr)
+
+for (i in 1:length(files)){
+  load(paste0(files[i]))
+  reference_TOM <- TOM[colnames(counts_dropout),colnames(counts_dropout)]
+  NPF_data_Counts <- scNPF.pro(x=t(counts_dropout), network=reference_TOM ,nThreads=8)
+  rownames(NPF_data_Counts) <- colnames(counts_dropout)
+  NPF_data <- log10(NPF_data_Counts + 1)
+  save(NPF_data, file = paste0(Analysis_Part,"_",project,"_",names_data[i],"_scNPF_GoldNTWK.RData"))
+  print(paste("scNPF on", files[i],"done!"))
+}
+```
+
+### ENHANCE
+
+```{r}
+# source echance script
+source(paste0("/home/steinheu/git-steinheu/code/enhance-R/enhance.R"))
+
+#file ='/home/steinheu/git-steinheu/code/enhance-R/data/pbmc-4k_expression.tsv.gz' # file containing the expression matrix
+
+FindDataFiles(pattern = "01_BeMa_Counts_*", 
+              what2replace= "01_BeMa_|.RData")
+
+for (i in 1:length(files)){
+  load(paste0(rdata,files[i]))
+  
+  srt <- CreateSeuratObject(counts = t(counts_dropout))
+  
+  srt <- NormalizeData(srt)
+  srt <- ScaleData(srt, features = rownames(srt))
+  
+  srt <- FindVariableFeatures(srt, nfeatures = 1000)
+  srt <- RunPCA(srt, features = VariableFeatures(srt))
+  srt <- RunTSNE(srt, dims = 1:10)
+  set <- enhance_seurat_wrapper(srt,
+                                setDefaultAssay = TRUE,
+                                assay = 'RNA',
+                                ratio_pcs = 2,
+                                k_nn = 8,
+                                target_transcripts = 2*10^5,
+                                percent_cells_max = 2)
+  set = NormalizeData(set)
+  set = ScaleData(set, features = rownames(set))
+  
+  ENHANCE_data <- as.matrix(set[["enhance"]]@scale.data)
+  ENHANCE_filter <- filterData(data = t(ENHANCE_data))
+  save(ENHANCE_filter, file = paste0(Analysis_Part,"_",project,"_",names_data[i],"_ENHANCE.RData"))
+  print(paste("ENHANCE on", files[i],"done!"))
+}
+```
+
+### DISC
+
+
+#### Import after runninf DISC
+
+```{r}
+FindDataFiles(pattern = "*.loom",
+              what2replace= "imputation_|.loom")
+
+for (i in 1:length(files)){
+  loom_file <- connect(filename = paste0(rdata, files[i]), mode = "r+")
+  DISC_data <-  loom_file$matrix[, ]
+  colnames(DISC_data) <- loom_file[["row_attrs/Gene"]][]
+  rownames(DISC_data) <- loom_file[["col_attrs/CellID"]][]
+
+  DISC_log <- log10(DISC_data +1)
+  DISC_filter <- filterData(DISC_log)
+  
+  save(DISC_filter, file = paste0(Analysis_Part,"_" ,project,"_Counts_dropExpr_",i,"_DISC.RData"))
+}
+```
+
+## Module preservation
+
+```{r}
+Analysis_Part ="03"
+```
+
+### Gold
+
+
+```{r}
+CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"),
+               test_data_path = paste0("01_",project,"_true_expression.RData"),
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"),
+               data_name = "Gold",
+               nPerms = 100)
+```
+
+### Dropout
+
+
+```{r}
+load(paste0("03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "01_BeMa_dropExpr_*",
+              what2replace= "01_BeMa_|.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("Dropout_", names_data[i]), 
+               nPerms = 100)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+CompData_Dropout <- CompData
+
+PostProcessMP(comp_data = CompData_Dropout, 
+              dataset_name = "Dropout",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+### DrImpute
+```{r}
+load(paste0("03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "*_DrImpute.RData", 
+              what2replace= "02_BeMa_Counts_|_DrImpute.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("DrImpute", names_data[i]), 
+               transpose_test = TRUE,
+               nPerms = 100)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+CompData_Dropout <- CompData
+
+PostProcessMP(comp_data = CompData_Dropout, 
+              dataset_name = "DrImpute",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+### SAVER
+
+```{r}
+load(paste0("03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "*_SAVER.RData", 
+              what2replace= "02_BeMa_Counts_|_SAVER.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("SAVER", names_data[i]), 
+               nPerms = 100)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+CompData_Dropout <- CompData
+
+PostProcessMP(comp_data = CompData_Dropout, 
+              dataset_name = "SAVER",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+### DCA
+
+```{r}
+load(paste0( "03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "*_DCA.RData", 
+              what2replace= "02_BeMa_Counts_|_DCA.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("DCA", names_data[i]), 
+               nPerms = 100)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+CompData_Dropout <- CompData
+
+PostProcessMP(comp_data = CompData_Dropout, 
+              dataset_name = "DCA",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+
+### scNPF
+#### with individual networks
+
+```{r}
+load(paste0("03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "*scNPF.RData", 
+              what2replace= "02_BeMa_|_scNPF.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("scNPF_", names_data[i]), 
+               nPerms = 100, 
+               transpose_test = TRUE)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+
+CompData_scNPF <- CompData
+
+PostProcessMP(comp_data = CompData_scNPF, 
+              dataset_name = "scNPF",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+#### with gold network
+
+```{r}
+load(paste0("03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "*_GoldNTWK.RData", 
+              what2replace= "02_BeMa_Counts_|_scNPF_GoldNTWK.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("scNPF_GoldNTWK_", names_data[i]), 
+               nPerms = 100, 
+               transpose_test = TRUE)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+
+CompData_scNPF_NTWK <- CompData
+
+PostProcessMP(comp_data = CompData_scNPF_NTWK, 
+              dataset_name = "scNPF_GoldNTWK",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+### ENHANCE
+```{r}
+load(paste0("03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "*_ENHANCE.RData", 
+              what2replace= "02_BeMa_Counts_|_ENHANCE.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("ENHANCE", names_data[i]),
+               nPerms = 100)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+CompData_Dropout <- CompData
+
+PostProcessMP(comp_data = CompData_Dropout, 
+              dataset_name = "ENHANCE",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+### DISC
+```{r}
+
+load(paste0("03_",project,"_CompData_Gold_MP.RData"))
+
+FindDataFiles(pattern = "*_DISC.RData",
+              what2replace= "02_BeMa_Counts_|_DISC.RData")
+
+for (i in 1:length(files)){
+  CalcModulePres(ref_data_path = paste0("01_",project,"_true_expression.RData"), 
+               test_data_path = paste0(files[i]), 
+               moduleVector_path = paste0("01_",project, "_DynamicColors_true_expression.RData"), 
+               data_name = paste0("DISC", names_data[i]),
+               nPerms = 100)
+  CompData <- cbind(CompData, plotData[,2])
+  print(paste("Module Preservation of ", files[i], "is completed!"))
+}
+CompData_Dropout <- CompData
+
+PostProcessMP(comp_data = CompData_Dropout, 
+              dataset_name = "DISC",
+              names_vec = names_data , 
+              module_names = modColors)
+
+```
+
+
+
+## Visualization 
+
+
+### Log2FC
+
+```{r}
+
+Analysis_Part ="04"
+
+
+Comp_files <- list.files(pattern = "03_BeMa_Comp_Gold2*")
+Comp_names <- gsub(x = Comp_files, pattern = "03_BeMa_Comp_Gold2|.RData", replacement = "")
+
+L <- list()
+for ( i in 1:length(Comp_files)){
+  load(paste0(rdata, Comp_files[i]))
+  data <- calc_LogFoldchange(comp = comp_data)
+  data <- data[,-1]
+  L[[i]] <- data
+}
+
+comp_data <- comp_data[!rownames(comp_data) %in% "gold",]
+
+names(L) <- Comp_names
+
+df <- melt(L)
+
+colnames(df) <- c("Module", "Sparsity", "Log2FC", "Imputation")
+
+df$Sparsity <- revalue(df$Sparsity, replace = c("dropExpr_1" = "84% Sparsity",
+                                                "dropExpr_2" = "75% Sparsity",
+                                                "dropExpr_3" = "66% Sparsity",
+                                                "dropExpr_4" = "55% Sparsity",
+                                                "dropExpr_5" = "46% Sparsity",
+                                                "dropExpr_6" = "40% Sparsity"))
+df$Sparsity <- factor(df$Sparsity, levels = c("40% Sparsity", "46% Sparsity", "55% Sparsity", "66% Sparsity", "75% Sparsity", "84% Sparsity"))
+
+df$Imputation <- factor(df$Imputation, levels = c("Dropout", "DrImpute", "SAVER", "DCA", "scNPF", "scNPF_GoldNTWK", "ENHANCE" , "DISC"))
+
+df$MoudleSizes <- rep(as.numeric(comp_data[,1]), 48)
+
+
+svg(paste0("R_", Analysis_Part, "_", project, "_Log2FC_Imputations.svg"), width = 14.3, height = 8 )
+p<- df %>%
+  ggplot(aes(x = Sparsity, y = Log2FC, fill = Imputation))  + 
+  geom_boxplot(outlier.alpha = 0, position=position_dodge(), width = 1) +
+  geom_point(aes( colour = Imputation),position=position_dodge(width = 1), size = 2) +
+  
+  geom_hline(yintercept=0, linetype = "dashed", size = 0.4, color = "#A6ACAF") +
+  
+  scale_fill_manual(values=c("#C32813",brewer.pal(9, "Greys")[-1])) +
+  scale_color_manual(values=c("#C32813",brewer.pal(9, "Greys")[-1])) +
+  
+  ggtitle("Distribution of log2 fold-changes")+
+  labs(x="", y=bquote("log2 fold-change of Z" ["summary"] ))+
+  
+  theme_bw(base_size = 22) +
+  theme(axis.text=element_text(size=20))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  # theme(strip.background = element_blank(),
+  #       panel.grid.major = element_blank(),
+  #       panel.grid.minor = element_blank(),
+  #       strip.text.x = element_blank()) +
+  theme(legend.position="bottom") +
+  
+  facet_grid(cols = vars(Sparsity), scales="free", space = "free")
+
+print(p)
+dev.off()
+```
+
+### Sparsity development
+
+```{r}
+Comp_files <- list.files(pattern = "03_BeMa_Comp_Gold2*")
+Comp_names <- gsub(x = Comp_files, pattern = "03_BeMa_Comp_Gold2|.RData", replacement = "")
+
+load(paste0("03_BeMa_Comp_Gold2Dropout.RData"))
+
+comp_data <- comp_data[!rownames(comp_data) %in% "gold",]
+
+df <- melt(comp_data[,-1])
+colnames(df) <- c("Module", "Sparsity", "ModulePreservation")
+df$Sparsity <- revalue(df$Sparsity, replace = c("dropExpr_1" = "84% Sparsity",
+                                                "dropExpr_2" = "75% Sparsity",
+                                                "dropExpr_3" = "66% Sparsity",
+                                                "dropExpr_4" = "55% Sparsity",
+                                                "dropExpr_5" = "46% Sparsity",
+                                                "dropExpr_6" = "40% Sparsity",
+                                                "Gold" = "Gold data"))
+df$Sparsity <- factor(df$Sparsity, levels = c("Gold data", "40% Sparsity", "46% Sparsity", "55% Sparsity", "66% Sparsity", "75% Sparsity", "84% Sparsity"))
+
+df$MoudleSizes <- rep(as.numeric(comp_data[,1]), 7)
+
+svg(paste0("R_",Analysis_Part, "_", project, "_SparsityDevelopment.svg"), width = 14 , height = 7)
+p<-ggplot(df, aes(x = MoudleSizes, y = ModulePreservation)) + 
+  geom_boxplot(outlier.alpha = 0)+
+  geom_point(shape = 21, colour ="black", fill= df$Module, size = 5) +
+  ggtitle("Distribution of Module-Preservation values")+
+  theme_bw(base_size = 20) +
+  theme(axis.text.x=element_text(size=16, angle = 0, hjust = 0.95))+
+  geom_hline(yintercept=2, linetype = "dashed", size = 0.8, color = "#0910F9") +
+  geom_hline(yintercept=10, linetype = "dashed", size = 0.8, color = "#129F4B")+
+  # theme(strip.background = element_blank(),
+  #       panel.grid.major = element_blank(),
+  #       panel.grid.minor = element_blank(),
+  #       strip.text.x = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x="Module Size", y=bquote("Module Preservation Z" ["summary"]))+
+  scale_x_continuous(breaks= c(0,2000)) +
+  coord_cartesian(ylim = c(0,50)) +
+  # theme(axis.text=element_text(size=20)) +
+  theme(strip.text.x = element_text(size = 20, colour = "black")) +
+  theme(axis.text.x = element_text(size=20),
+        axis.text.y = element_text(size=20))+
+  #scale_color_manual(values=c("#BC4D4D","#B7BDB9", "#949795", "#686B69")) +
+  facet_grid(cols = vars(Sparsity), scales="free", space = "free")
+print(p)
+dev.off()
+
+```
+
+### Only highest sparsity --> Supplements
+
+```{r}
+Comp_files <- list.files(pattern = "03_BeMa_Comp_Gold2*")
+Comp_names <- gsub(x = Comp_files, pattern = "03_BeMa_Comp_Gold2|.RData", replacement = "")
+
+
+L <- list()
+for ( i in 1:length(Comp_files)){
+  load(paste0(rdata, Comp_files[i]))
+  comp_data <- comp_data[!rownames(comp_data) %in% "gold",]
+  comp_data <- comp_data[,3]
+  L[[i]] <- comp_data
+}
+
+names(L) <- Comp_names
+
+#comp_data <- comp_data[!rownames(comp_data) %in% "gold",]
+
+load(paste0(rdata, "03_BeMa_Comp_Gold2Dropout.RData"))
+
+comp_data <- comp_data[!rownames(comp_data) %in% "gold",]
+
+df <- melt(L)
+colnames(df) <- c("ModulePreservation", "Imputation")
+df$Imputation <- revalue(df$Imputation, replace = c("scNPF_GoldNTWK" ="scNPF \n GoldNTWK"))
+df$Imputation <- factor(df$Imputation, levels = c("Dropout", "DrImpute", "SAVER", "DCA", "scNPF", "scNPF \n GoldNTWK", "ENHANCE", "DISC"))
+
+df$MoudleSizes <- rep(as.numeric(comp_data[,1]), 8)
+df$Module <- rep(rownames(comp_data), 8)
+
+svg(paste0("R_", Analysis_Part, "_", project, "_HighestSparsity.svg"), width = 11 , height = 5)
+
+p<-  ggplot(df, aes(x = MoudleSizes, y = ModulePreservation)) + 
+  geom_boxplot(outlier.alpha = 0)+
+  geom_point(shape = 21, colour ="black", fill= df$Module, size = 4) +
+  # ggtitle("Distribution of Module-Preservation values")+
+  theme_bw(base_size = 17) +
+  theme(axis.text.x=element_text(size=15, angle = 45, hjust = 0.95))+
+  geom_hline(yintercept=2, linetype = "dashed", size = 0.5, color = "#0910F9") +
+  geom_hline(yintercept=10, linetype = "dashed", size = 0.5, color = "#129F4B")+
+  theme(strip.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text.x = element_blank()) +
+  labs(x="", y=bquote("Module Preservation Z" ["summary"]))+
+  scale_x_continuous(breaks= c(0,1000,2000)) +
+  coord_cartesian(ylim = c(0,50)) +
+  theme(strip.text.x = element_text(size = 16, colour = "black")) +
+  #scale_color_manual(values=c("#BC4D4D","#B7BDB9", "#949795", "#686B69")) +
+  facet_grid(cols = vars(Imputation), scales="free", space = "free")
+print(p)
+dev.off()
+
+
+```
+
+### Expression Density plots
+
+```{r}
+
+files <- intersect( list.files(pattern = "01_BeMa_dropExpr_*"), list.files(path = rdata, pattern = "*.RData"))
+names <- gsub(files, pattern = "01_BeMa_|.RData", replacement = "")
+files <- c(files, "01_BeMa_true_expression.RData")
+names <- c(names, "Gold")
+comb <- data.frame(Var1=logical(), Var2=logical(), value=numeric(), Data=character())
+
+for (i in 1:length(files)){
+  load(paste0(rdata, files[i]))
+  int <- melt(do_Expr)
+  int$Data <- rep(names[i], dim(int)[1])
+  comb <- bind_rows(comb, int)}
+
+comb$Data <- revalue(comb$Data, replace = c("dropExpr_1" = "84% Sparsity",
+                                                "dropExpr_2" = "75% Sparsity",
+                                                "dropExpr_3" = "66% Sparsity",
+                                                "dropExpr_4" = "55% Sparsity",
+                                                "dropExpr_5" = "46% Sparsity",
+                                                "dropExpr_6" = "40% Sparsity"))
+
+# adding information about real biological data set
+
+
+load("/home/steinheu/Data/2020_Benchmark_Imputation/Kim_Retina_data/RData/01_BeMa_KIM_Preprocessed.RData")
+bio <- melt(Kim_data_filtered)
+bio$Data <- rep("Human Retina Organoids", dim(bio)[1])
+comb <- bind_rows(comb, bio)
+comb$Data <- factor(comb$Data, levels = c("40% Sparsity", 
+                                          "46% Sparsity", 
+                                          "55% Sparsity", 
+                                          "66% Sparsity", 
+                                          "75% Sparsity", 
+                                          "84% Sparsity",
+                                          "Gold",
+                                          "Human Retina Organoids"))
+
+svg(paste0("R_05_", project,"_ExprDist.svg"), height = 6, width = 12 )
+comb %>%
+ggplot( aes(x = value, color = Data)) + 
+  geom_density(size=1.5) +
+  scale_color_manual(values=c(rev(brewer.pal(7, "Greys")[-1]), "#DF7702", "#0B1BDC")) +
+  coord_cartesian(xlim=c(0,0.2), ylim=c(0,15)) +
+  xlab("Log Expression Value") +
+  ylab("Density") +
+  labs(title="Distribution of Expression value",
+       subtitle = "Of Synthetic and Human Retina Organoid data",
+       cption = "Zoomed in") + 
+  theme_bw(base_size = 20) %+replace%
+        theme(
+            panel.grid = element_blank(),
+            complete = TRUE) +
+  # theme(legend.position="bottom") +
+  theme(axis.text=element_text(size=18))
+dev.off() 
+
+svg(paste0("R_05_", project,"_ExprDist_full.svg"), height = 6, width = 12 )
+comb %>%
+ggplot( aes(x = value, color = Data)) + 
+  geom_density(size=1.5) +
+  scale_color_manual(values=c(rev(brewer.pal(7, "Greys")[-1]), "#DF7702", "#0B1BDC")) +
+  xlab("Log Expression Value") +
+  ylab("Density") +
+  # labs(title="Distribution of Expression value",
+  #      subtitle = "Of Synthetic and Human Retina Organoid data") +
+  theme_bw(base_size = 20) %+replace%
+        theme(
+            panel.grid = element_blank(),
+            complete = TRUE) +
+  # theme(legend.position="bottom") +
+  theme(axis.text=element_text(size=18))
+dev.off() 
+
+```
+
+

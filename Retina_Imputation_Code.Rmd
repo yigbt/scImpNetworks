@@ -1,0 +1,208 @@
+---
+title: "Imputation of human retina organoid data set"
+author: "Lisa M. Steinheuer"
+date: "January 7, 2021"
+output: html_document
+---
+# Biological data set --> Retina Kim paper
+
+Downloaded from: GEO:GSE119343
+
+```{r}
+project <- "BeMa_KIM"
+
+```
+
+## Preparing & Preprocessing data
+
+
+```{r}
+Analysis_Part ="01"
+target_path #define where the data is stored
+
+df.import.all=lapply(paste0(target_path,files), read.table, sep='\t', row.names=1)
+Bulk_full <- do.call(cbind,df.import.all)
+names <- gsub(files, pattern="*_Aligned.out.sorted.HTseq.out.txt", replacement = "")
+colnames(Bulk_full) <- names
+
+#write.csv(Bulk_full, file = '/work/steinheu/2020_Benchmarking_Imp/Retina_Markers/input/01_Full_Kim_OrganoidData.csv')
+
+ra <- read.table(paste0(target_path,'GSM3371554_Organoid8M_R9_C46_Aligned.out.sorted.HTseq.out.txt'), sep='\t', row.names=1)
+
+
+library("biomaRt")
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+
+hgnc_id <- getBM(attributes=c('ensembl_gene_id_version', 'hgnc_symbol'),filters = 'hgnc_symbol', values =  rownames(a), mart = ensembl)
+hgnc_id_complete <- hgnc_id[complete.cases(hgnc_id),] 
+a_filtered <- a[rownames(a) %in% hgnc_id_complete$hgnc_symbol,]
+
+write.csv(a_filtered, file = '01_Full_Kim_OrganoidData.csv')
+```
+
+```{r}
+Kim_data <- read.csv(paste0(input, "01_Full_Kim_OrganoidData.csv"), row.names = 1)
+Kim_data_pp <- preprocessSC(Kim_data)
+Kim_data_log <- log10(Kim_data_pp +1)
+
+Kim_data_filtered <- filterData(t(Kim_data_log))
+
+save(Kim_data_filtered, file =  paste0(rdata,Analysis_Part,"_",project,"_Preprocessed.RData"))
+```
+
+## Imputations
+### scNPF
+
+
+```{r}
+# filtered_data <- filterData(data = t(Kim_data_log))
+
+FindBetaAndPlot(data = Kim_data_filtered, 
+                powers = c(c(1:10), seq(from = 12, to=20, by=2)), 
+                data_set_name = "sparse_KIM")
+
+build_tree(multiExpr = Kim_data_filtered, 
+           beta = 10,
+           data_type = "sparse_KIM", 
+           minClusterSize = 30)
+
+```
+
+```{r}
+colnames(TOM) <- colnames(Kim_data_filtered)
+rownames(TOM) <- colnames(Kim_data_filtered)
+Kim_data_ntwk <- Kim_data_pp[colnames(TOM),]
+
+Analysis_Part ="02"
+
+Kim_NPF_Counts <- scNPF.pro(x=as.matrix(Kim_data_ntwk), network=TOM ,nThreads=8)
+save(Kim_NPF_Counts, file = paste0(rdata,Analysis_Part,"_",project,"_scNPF.RData"))
+write.table(Kim_NPF_Counts, file = paste0(rdata,Analysis_Part,"_",project,"_scNPF.csv"), sep = ";")
+
+load(system.file("data","string.Rdata",package = "scNPF"))
+
+Kim_NPF_String_Counts <- scNPF.pro(x=as.matrix(Kim_data_pp), network=string ,nThreads=8)
+
+save(Kim_NPF_String_Counts, file = paste0(Analysis_Part,"_",project,"_scNPF_String.RData"))
+write.table(Kim_NPF_String_Counts, file = paste0(Analysis_Part,"_",project,"_scNPF_String.csv"), sep = ";")
+```
+
+### DrImpute
+
+```{r}
+exdata <- preprocessSC(Kim_data)
+logdat <- log(exdata+1)
+cls <- getCls(logdat)
+DrImpute_KIM <- DrImpute(logdat, cls = cls)
+colnames(DrImpute_KIM) <- colnames(Kim_data)
+
+save(DrImpute_KIM, file = paste0(Analysis_Part,"_",project,"_DrImpute.RData"))
+Counts_DrImpute_KIM <- round((10^(DrImpute_KIM))-1,0)
+write.table(Counts_DrImpute_KIM, file = paste0(Analysis_Part,"_",project,"_DrImpute.csv"), sep = ";")
+```
+
+
+### SAVER
+
+```{r}
+SAVER_KIM <- saver(exdata, 
+                    do.fast = TRUE, 
+                    ncores = 8, 
+                    npred = NULL, 
+                    pred.cells = NULL, 
+                    pred.genes = NULL,
+                    pred.genes.only = FALSE, 
+                    null.model = FALSE, 
+                    mu = NULL, 
+                    estimates.only = TRUE)
+# SAVER_log <- log10(SAVER_KIM + 1)
+#SAVER_filter <- filterData(data = t(SAVER_log))
+write.table(SAVER_KIM, file = paste0(Analysis_Part,"_",project,"_SAVER.csv"), sep = ";")
+
+```
+
+
+### ENHANCE
+
+```{r}
+#source(paste0("/home/steinheu/git-steinheu/code/enhance-R/enhance.R"))
+
+srt <- CreateSeuratObject(counts = as.matrix(Kim_data))
+
+srt <- NormalizeData(srt)
+srt <- ScaleData(srt, features = rownames(srt))
+
+srt <- FindVariableFeatures(srt, nfeatures = 1000)
+srt <- RunPCA(srt, features = VariableFeatures(srt))
+srt <- RunTSNE(srt, dims = 1:10)
+set <- enhance_seurat_wrapper(srt,
+                              setDefaultAssay = TRUE,
+                              assay = 'RNA',
+                              ratio_pcs = 2,
+                              k_nn = 8,
+                              target_transcripts = 2*10^5,
+                              percent_cells_max = 2)
+set = NormalizeData(set)
+set = ScaleData(set, features = rownames(set))
+ENHANCE_data <- as.matrix(set[["enhance"]]@counts)
+#ENHANCE_filter <- filterData(data = t(ENHANCE_data))
+save(ENHANCE_data, file = paste0(Analysis_Part,"_",project,"_ENHANCE.RData"))
+write.table(ENHANCE_data, file = paste0(Analysis_Part,"_",project,"_ENHANCE.csv"), sep = ";")
+
+```
+
+
+```{r}
+results <- "/home/steinheu/Data/2020_Benchmark_Imputation/Kim_Retina_data/results/"
+
+```
+
+## Visualization of final assessment
+
+```{r}
+
+theme_basic2 <- function() {
+  theme_bw(base_size = 35) +
+    theme(strip.background = element_blank(), 
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank())
+}
+
+# Import output of automatic annotation pipeline
+
+combined_data <- read.csv(paste0(results, "03_Combined_Kim_Annotation_plus_paper.csv"), row.names = 1, header = TRUE)
+colnames(combined_data) <- c("Mean Silhouette Coefficient", "Number of Clusters", "Cones(%)", "Rods(%)", "Müller Glia(%)", "Not assignable(%)",
+                             "Mixed annotation(%)", "Pure Clusters(%)")
+combined_data <- combined_data[c( "sparse", "DrImpute", "SAVER", "DCA", "scNPF", "scNPF_String", "ENHANCE"),]
+combined_data$Type <- rownames(combined_data)
+combined_data$Type <- factor(combined_data$Type, levels = c("sparse", "DrImpute", "SAVER", "DCA", "scNPF", "scNPF_String", "ENHANCE"))
+
+svg(paste0(results, "04_Heatmap_Cells.svg"))
+combined_data %>% select(! `Mean Silhuette Coefficient` & ! `Number of Clusters` & ! `Type`) %>% t %>% pheatmap(col = brewer.pal(9, "Blues"), treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE, fontsize = 17)
+dev.off()
+
+svg(paste0(results, "04_Heatmap_SilCoef.svg"))
+combined_data %>% select( `Mean Silhouette Coefficient`) %>% t %>% pheatmap(col = brewer.pal(9, "RdBu"), treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE, fontsize = 17, breaks = seq(-1,1, by = 0.2))
+dev.off()
+
+svg(paste0(results, "04_Barplot_ClusterSize.svg"), height = 5, width = 10)
+combined_data  %>% ggplot( aes(x= Type ,y = `Number of Clusters`)) +
+  geom_bar(stat="identity") + 
+  theme_basic2() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.line = element_line(),
+        panel.border = element_blank()) 
+  
+dev.off()
+
+# combined_data %>% t %>% pheatmap(col = brewer.pal(9, "Reds"), treeheight_row = 0, treeheight_col = 0, cutree_rows  = 3)
+
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
