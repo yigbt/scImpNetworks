@@ -171,30 +171,50 @@ theme_basic2 <- function() {
 # Import output of automatic annotation pipeline
 
 combined_data <- read.csv(paste0(results, "03_Combined_Kim_Annotation_plus_paper.csv"), row.names = 1, header = TRUE)
-colnames(combined_data) <- c("Mean Silhouette Coefficient", "Number of Clusters", "Cones(%)", "Rods(%)", "Müller Glia(%)", "Not assignable(%)",
-                             "Mixed annotation(%)", "Pure Clusters(%)")
+colnames(combined_data) <- c("Mean Silhouette Coefficient", "Number of Clusters", "Cones", "Rods", "Müller Glia", "Not \n assignable", "Mixed \n annotation", "Pure Clusters(%)")
 combined_data <- combined_data[c( "sparse", "DrImpute", "SAVER", "DCA", "scNPF", "scNPF_String", "ENHANCE"),]
-combined_data$Type <- rownames(combined_data)
-combined_data$Type <- factor(combined_data$Type, levels = c("sparse", "DrImpute", "SAVER", "DCA", "scNPF", "scNPF_String", "ENHANCE"))
+combined_data$Imputation <- rownames(combined_data)
+combined_data$Imputation <- revalue(combined_data$Imputation, c("scNPF_String"="scNPF String"))
+combined_data$Imputation <- factor(combined_data$Imputation, levels = c("sparse", "DrImpute", "SAVER", "DCA", "scNPF", "scNPF String","ENHANCE"))
 
-svg(paste0(results, "04_Heatmap_Cells.svg"))
-combined_data %>% select(! `Mean Silhuette Coefficient` & ! `Number of Clusters` & ! `Type`) %>% t %>% pheatmap(col = brewer.pal(9, "Blues"), treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE, fontsize = 17)
-dev.off()
-
-svg(paste0(results, "04_Heatmap_SilCoef.svg"))
-combined_data %>% select( `Mean Silhouette Coefficient`) %>% t %>% pheatmap(col = brewer.pal(9, "RdBu"), treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE, fontsize = 17, breaks = seq(-1,1, by = 0.2))
-dev.off()
-
-svg(paste0(results, "04_Barplot_ClusterSize.svg"), height = 5, width = 10)
-combined_data  %>% ggplot( aes(x= Type ,y = `Number of Clusters`)) +
-  geom_bar(stat="identity") + 
+svg(paste0(results, "04_SideBySideBarplot.svg"), height = 16, width = 22)
+combined_data %>% 
+  select(c('Cones', 'Rods', `Müller Glia`, `Not \n assignable` ,`Mixed \n annotation`, 'Imputation')) %>% 
+  melt() %>% 
+  mutate(reordered_types = factor(variable, levels = c(rev(levels(variable))))) %>%
+  ggplot( aes(fill=Imputation, y=value, x=variable)) + 
+  geom_bar(position=position_dodge(), stat="identity") +
+  scale_fill_manual(values=c('black','#D45587','#FBAB6D', '#33a02c', '#1f78b4','#a6cee3', '#7570b3')) +
+  ylab("Proportion of cells (%)") + 
+  xlab("Cell Type") +
   theme_basic2() +
-  theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank(),
-        axis.line = element_line(),
-        panel.border = element_blank()) 
-  
+  #theme(legend.text = element_text(size = 32)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(legend.position="bottom") 
+dev.off()
+
+svg(paste0(results, "04_Barplot_MSC.svg"), height = 10, width = 11)
+combined_data %>% 
+  select(c("Mean Silhouette Coefficient","Imputation")) %>% 
+  melt() %>% 
+  ggplot(aes(x = Imputation, y = value)) + 
+  geom_bar(stat="identity") +
+  #scale_fill_manual(values=c('#ffffcc','#a1dab4','#41b6c4','#2c7fb8','#253494')) +
+  ylab("Mean Silhouette \n Coeficient") + 
+  xlab("Imputation") +
+  theme_basic2() +
+  #theme(legend.text = element_text(size = 32)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+dev.off()
+
+svg(paste0(results, "04_Barplot_ClusterSize.svg"), height = 10, width = 10)
+combined_data  %>% ggplot( aes(x= Imputation ,y = `Number of Clusters`)) +
+  geom_bar(stat="identity") + 
+  ylab("Number \n of Clusters") + 
+  xlab("Imputation") +
+  theme_basic2() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
 dev.off()
 
 # combined_data %>% t %>% pheatmap(col = brewer.pal(9, "Reds"), treeheight_row = 0, treeheight_col = 0, cutree_rows  = 3)

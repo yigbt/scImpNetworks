@@ -577,8 +577,8 @@ p<- df %>%
   
   geom_hline(yintercept=0, linetype = "dashed", size = 0.4, color = "#A6ACAF") +
   
-  scale_fill_manual(values=c("#C32813",brewer.pal(9, "Greys")[-1])) +
-  scale_color_manual(values=c("#C32813",brewer.pal(9, "Greys")[-1])) +
+  scale_fill_manual(values=c('black','#D45587','#FBAB6D', '#7570b3', '#33a02c','#b2df8a','#1f78b4','#a6cee3')) +
+  scale_color_manual(values=c('black','#D45587','#FBAB6D', '#7570b3', '#33a02c','#b2df8a','#1f78b4','#a6cee3')) +
   
   ggtitle("Distribution of log2 fold-changes")+
   labs(x="", y=bquote("log2 fold-change of Z" ["summary"] ))+

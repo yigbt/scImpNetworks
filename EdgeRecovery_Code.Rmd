@@ -48,40 +48,43 @@ library('rlist')
 library('plyr')
 
 #--------------------------------------------------------------------------------#
-# Calculate number of true ones
+# Plot denisty of TOM values
+cols_density <- (c('#f1eef6','#d0d1e6','#a6bddb','#74a9cf','#2b8cbe','#045a8d'))
 
-CountOnes <- function(true_data, thres_value){
-  Counts <- matrix(ncol = length(thres_value), nrow = 1)
-  #Adjacency of filtered gold data set
-  for (x in 1:length(thres_value)){
-    #print(paste("Loading:", paste0(data_comp_path, test_data[i])))
-    #y <- load(paste0(data_comp_path, test_data[i]))
-    #z <- get(y)
+
+plot_density_fun <- function(data_comp_path, data){
+  load(paste0("01_BeMa_true_expression.RData"))
+  plot_adj <- adjacency(trueExpr, type = "signed" , power = 9, corFnc = "bicor")
+  plot_tom <-  WGCNA::TOMsimilarity(plot_adj)
+  colnames(plot_tom) <- colnames(plot_tom)
+  rownames(plot_tom) <- rownames(plot_tom)
+  diag(plot_tom) <- NA
+  density_plot <<- plot_tom %>% 
+    melt() %>%
+    na.omit() %>% 
+    ggplot(aes(x = value))+ geom_density(color = "#8C8C85", fill = "#EEAF05")
+  for (i in length(data):1){
+    print(paste("Loading:", paste0(data_comp_path, data[i])))
+    y <- load(paste0(data_comp_path, data[i]))
+    z <- get(y)
+    #print(paste("Loading:", paste0(data_comp_path, data[i]), "done!"))
+    #Adjacency of predicted data set
+    adj <- adjacency(z, type = "signed" , power = 9 , corFnc = "bicor")
+    tom_test <- WGCNA::TOMsimilarity(adj)
+    colnames(tom_test) <- colnames(adj)
+    rownames(tom_test) <- rownames(adj)
     
-    #trueExpr_filtered <- true_data[rownames(z), colnames(z)]
-    adj_true <- adjacency(true_data, type = "signed" , power = 9, corFnc = "bicor")
-    tom_true <- WGCNA::TOMsimilarity(adj_true)
-    colnames(tom_true) <- colnames(adj_true)
-    rownames(tom_true) <- rownames(adj_true)
-    print("TOM done!")
-    tom_true_melt <- melt(tom_true)
-    threshold_gold <- mean(tom_true_melt$value) + (thres_value[x])*sd(tom_true_melt$value)
-    print(threshold_gold)
-    diag(tom_true) <- NA
-    tom_true_red <- melt(tom_true)
-    tom_true_red <- na.omit(tom_true_red)
-    print("Diagonal removed!")
-    
-    ref <- binarize(tom_true_red, threshold = threshold_gold)
-    print("Binarization done!")
-    print(paste("% of true edges=", sum(ref[,3])/dim(tom_true_melt)[1]*100))
-    print(paste("Number of true edges=", sum(ref[,3])))
-    Counts[1,x] <- sum(ref[,3])
+    diag(tom_test) <- NA
+    tom_test_red <- melt(tom_test)
+    tom_test_red <- na.omit(tom_test_red)
+    density_plot <<- density_plot + geom_density(data = tom_test_red, aes(x = value), color = "#8C8C85", fill=cols_density[i], alpha=0.8)
   }
-  colnames(Counts) <-c(paste0(thres_value,"std+mean"))
-  rownames(Counts) <-"Gold"
-  outputCounts <<- Counts
+  density_plot <<- density_plot + theme_bw(base_size = 14)+
+    theme(strip.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    xlab("TOM values") +
+    ylab("Density")
 }
+
 
 #--------------------------------------------------------------------------------#
 # Evaluate the performance
@@ -96,6 +99,7 @@ EvaluateSpecificity <- function(test_data, true_data, thres_value){
   diag(tom_test) <- NA
   tom_test_red <- melt(tom_test)
   tom_test_red <- na.omit(tom_test_red)
+  threshold_test <<-  mean(tom_test_red$value) + (thres_value)*sd(tom_test_red$value)
 
 
 
@@ -119,7 +123,7 @@ EvaluateSpecificity <- function(test_data, true_data, thres_value){
   #print("Calculated threshold")
   #binarization: above threshold of mean+8*std == 1, below == 0
   ref <<- binarize(tom_true_red, threshold = threshold_gold)
-  pred <- binarize(tom_test_red, threshold = threshold_gold)
+  pred <- binarize(tom_test_red, threshold = threshold_test)
   #print("Binarization done!")
   #Confusion matrix to infer Specificity and Sensitivity
   conf <<- confusionMatrix(data= as.factor(pred$value), reference= as.factor(ref$value), positive = "1",  dnn = c("Prediction", "Reference"))
@@ -163,6 +167,8 @@ Auto_Eval_Stepwise <- function( range, data, transpose_test_data = FALSE){
   
   return(Sum_list)
 }
+
+range <- c(1,2)
 ```
 
 ## Data generation
@@ -175,8 +181,22 @@ data <- list.files(pattern = "01_BeMa_dropExpr*")
 Auto_Eval_Stepwise(range, data= data)
 save(Sum_list, file= paste0("01_", project, "_EvalDrop.RData"))
 
-CountOnes(true_data = trueExpr, thres_value = range, data_comp_path= rdata_input, test_data = data)
-print(outputCounts)
+
+plot_density_fun(data = data, data_comp_path  = rdata_input)
+
+svg(paste0(results, "000_DensityPlot_Sparse.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  coord_cartesian(xlim = c(0,0.01)) +
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
+
+
+
 ```
 
 ### DrImpute
@@ -187,6 +207,18 @@ data <- list.files(pattern = "*_DrImpute.RData")
 Auto_Eval_Stepwise_t(range, data= data, transpose_test_data = TRUE)
 save(Sum_list, file= paste0("01_", project, "_EvalDrImpute.RData"))
 
+
+plot_density_fun(data = data, data_comp_path  = rdata_input)
+
+svg(paste0(results, "000_DensityPlot_SAVER.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
 ```
 
 
@@ -198,6 +230,18 @@ data <- list.files(pattern = "*_SAVER.RData")
 Auto_Eval_Stepwise(range, data= data)
 save(Sum_list, file= paste0("01_", project, "_EvalSAVER.RData"))
 
+
+plot_density_fun(data = data, data_comp_path  = rdata_input)
+
+svg(paste0(results, "000_DensityPlot_SAVER.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
 ```
 
 
@@ -208,6 +252,19 @@ data <- list.files(pattern = "*_DCA.RData")
 
 Auto_Eval_Stepwise(range, data= data)
 save(Sum_list, file= paste0("01_", project, "_EvalDCA.RData"))
+
+
+plot_density_fun(data = data, data_comp_path  = rdata_input)
+
+svg(paste0(results, "000_DensityPlot_DCA.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
 
 ```
 
@@ -220,7 +277,17 @@ data <- list.files(path = rdata_input,
 Auto_Eval_Stepwise(range, data= data, transpose_test_data =TRUE)
 save(Sum_list, file= paste0("01_", project, "_EvalscNPF.RData"))
 
-
+plot_density_fun(data = data, data_comp_path  = rdata_input)
+density_plot <- density_plot + coord_cartesian(ylim = c(0,250))
+svg(paste0(results, "000_DensityPlot_scNPF.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
 ```
 
 ### scNPF Gold NTWK
@@ -232,6 +299,18 @@ Auto_Eval_Stepwise(range, data= data, transpose_test_data = TRUE)
 save(Sum_list, file= paste0("01_", project, "_EvalscNPF_GoldNTWK.RData"))
 
 
+plot_density_fun(data = data, data_comp_path  = rdata_input)
+
+svg(paste0(results, "000_DensityPlot_scNPF_Gold.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
+
 ```
 
 ### ENHANCE
@@ -242,7 +321,17 @@ data <- list.files(pattern = "*_ENHANCE.RData")
 Auto_Eval_Stepwise(range, data= data)
 save(Sum_list, file= paste0("01_", project, "_EvalENHANCE.RData"))
 
+plot_density_fun(data = data, data_comp_path  = rdata_input)
 
+svg(paste0(results, "000_DensityPlot_ENHANCE.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
 ```
 
 ### DISC
@@ -253,6 +342,18 @@ data <- list.files(pattern = "*_DISC.RData")
 Auto_Eval_Stepwise(range,  data= data)
 save(Sum_list, file= paste0("01_", project, "_EvalDISC.RData"))
 
+plot_density_fun(data = data, data_comp_path  = rdata_input)
+
+svg(paste0(results, "000_DensityPlot_DISC.svg"), height = 5, width = 8)
+density_plot <- density_plot + 
+  coord_cartesian(xlim = c(0,0.1)) +
+  theme_bw(base_size = 20) %+replace%
+  theme(
+    panel.grid = element_blank(),
+    complete = TRUE) +
+    theme(axis.text=element_text(size=20))
+print(density_plot)
+dev.off()
 
 ```
 
@@ -330,7 +431,7 @@ p <- df %>%
   facet_grid(cols = vars(Threshold)) +
   # labs(title = "Precision on downsampled bulk",
   #               subtitle = "Model performace of each imputation method across each sparsity level") +
-  xlab("Sparsity") +
+  xlab("Dropout") +
   ylab("Precision")
 
 svg(paste0("R_01_", project, "_PrecisionOverImpSparse_facets.svg"),
@@ -353,7 +454,7 @@ p <- df %>%
   facet_grid(cols = vars(Threshold)) +
   # labs(title = "Recall on downsampled bulk",
   #               subtitle = "Model performace of each imputation method across each sparsity level") +
-  xlab("Sparsity") +
+  xlab("Dropout") +
   ylab("Recall")
 
 svg(paste0("R_01_", project, "_RecallOverImpSparse_facets.svg"),
@@ -366,7 +467,7 @@ dev.off()
 
 ```{r}
 p <- df %>% 
-  filter(EvalMetric =="Precision" | EvalMetric =="MCC" | EvalMetric == "Recall") %>%  filter(Threshold == "2xStd+mean") %>% 
+  filter(EvalMetric =="Precision" | EvalMetric =="MCC" | EvalMetric == "Recall") %>%  filter(Threshold == "1xStd+mean") %>% 
   ggplot(aes(x =Source_Sparsity, y=value, colour=Imputation, group=Imputation))+
   geom_line(size =2.1, color = "black") +
   geom_line(size =2) +
@@ -376,11 +477,11 @@ p <- df %>%
   theme(axis.text.x = element_text(angle = 0))+
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
   theme(legend.position="bottom") +
-  scale_color_manual(values=c("#C32813",brewer.pal(9, "Greys")[-c(1)])) +
+  scale_color_manual(values=c('black','#D45587','#FBAB6D', '#7570b3', '#33a02c','#b2df8a','#1f78b4','#a6cee3')) +
   facet_grid(cols = vars(EvalMetric)) +
   labs(title = "Edge recovery",
                 subtitle = "Model performace of each imputation method across each sparsity level")+
-  xlab("Sparsity") +
+  xlab("Dropout") +
   ylab("Value")
 
 svg(paste0("R_01_", project, "_EvalOverImpSparse_TH2_recall.svg"),
@@ -413,7 +514,7 @@ p <- df %>%
   
   # p <- p + labs(title = "MCC on downsampled bulk",
   #               subtitle = "Model performace of each imputation method across each sparsity level")
-p <- p + xlab("Sparsity") +
+p <- p + xlab("Dropout") +
   ylab("MCC")
 svg(paste0("R_01_", project, "_MCCoverImpSparse_facets.svg"),
     width=10, 
@@ -426,53 +527,6 @@ dev.off()
 
 ```
 
-
-```{r}
-load("01_BeMa_true_expression.RData")
-adj_true <- adjacency(trueExpr, type = "signed" , power = 9, corFnc = "bicor")
-tom_true <- WGCNA::TOMsimilarity(adj_true)
-colnames(tom_true) <- colnames(adj_true)
-rownames(tom_true) <- rownames(adj_true)
-tom_true_melt <- melt(tom_true)
-
-svg(paste0("R_02_", project,"_Dist_GoldR.svg"), width = 8, height = 6)
-
-ggplot(tom_true_melt, aes(value))  + 
-  geom_histogram(bins = 500) +
-  coord_cartesian(ylim = c(0,500000), xlim = c(0, 0.1)) +
-  geom_vline(xintercept = mean(tom_true_melt$value) + (1)*sd(tom_true_melt$value), col = "#0F0B77") +
-  geom_vline(xintercept = mean(tom_true_melt$value) + (2)*sd(tom_true_melt$value), col = "#110ACB") +
-  geom_vline(xintercept = mean(tom_true_melt$value) + (3)*sd(tom_true_melt$value), col = "#413BF1") +
-  geom_vline(xintercept = mean(tom_true_melt$value) + (4)*sd(tom_true_melt$value), col = "#6F6BF9") +
-  theme_bw(base_size = 20) +
-  theme(axis.text=element_text(size=18)) +
-  theme(strip.background = element_blank(), 
-        panel.grid.major = element_blank(), 
-        panel.grid.minor = element_blank()) +
-  ylab("Frequency") +
-  xlab("TOM value") 
-  # labs(title="Distribution of Gold data correlation",
-  #      subtitle = 'Showing different thresholds')
-dev.off()
-
-
-svg(paste0("R_02_", project,"_Dist_GoldR_full.svg"), width = 10, height = 8)
-
-ggplot(tom_true_melt, aes(value))  + 
-  geom_histogram(bins = 500) +
-  coord_cartesian(ylim = c(0,500000)) +
-  theme_bw(base_size = 15) +
-  theme(strip.background = element_blank(), 
-        panel.grid.major = element_blank(), 
-        panel.grid.minor = element_blank()) +
-  ylab("Frequency") +
-  xlab("TOM value") 
-  # labs(title="Distribution of Topological Overlap Matrix Similarities",
-  #      subtitle = 'Showing different thresholds')
-dev.off()
-
-
-```
 
 
 # Session Info
